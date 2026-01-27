@@ -1,4 +1,4 @@
-# NỘI QUY CÔNG TY
+# NỘI QUY CÔNG TY TECH
 
 ## Mục lục
 
@@ -18,7 +18,7 @@
 
 # 1. Giới thiệu chung
 
-Nội quy này quy định các nguyên tắc làm việc, ứng xử, an toàn và trách nhiệm của toàn bộ nhân viên Công ty . Mục tiêu là xây dựng môi trường làm việc chuyên nghiệp, minh bạch và hiệu quả.
+Nội quy này quy định các nguyên tắc làm việc, ứng xử, an toàn và trách nhiệm của toàn bộ nhân viên Công ty TECH. Mục tiêu là xây dựng môi trường làm việc chuyên nghiệp, minh bạch và hiệu quả.
 
 ---
 
