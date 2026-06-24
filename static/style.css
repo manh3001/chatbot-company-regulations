@@ -27,6 +27,8 @@ h1 {
   padding: 10px;
   border-radius: 6px;
   background: #fafafa;
+  display: flex;
+  flex-direction: column;
 }
 
 .message {
@@ -34,6 +36,8 @@ h1 {
   padding: 8px 12px;
   border-radius: 12px;
   max-width: 80%;
+  white-space: pre-wrap;
+  word-wrap: break-word;
 }
 
 .user {

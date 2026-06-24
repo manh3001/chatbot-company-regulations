@@ -2,28 +2,28 @@ import os
 import time
 import uuid
 import logging
+import urllib.request
 from datetime import datetime
 from dotenv import load_dotenv
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from app import storage
 from app.rag_chain import (
     create_qa_components,
     load_cache,
     save_cache,
-    rewrite_query_with_history,
-    get_top_docs_vectorstore,
 )
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("chatbot_api")
 
-app = FastAPI(title="Company Chatbot API", version="1.0.0")
+app = FastAPI(title="Company Chatbot API", version="2.0.0")
 
 # CORS
 app.add_middleware(
@@ -34,90 +34,75 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# In-memory caches / histories (lightweight)
-CACHE = load_cache()  # question -> {answer, timestamp}
-HISTORY = {}  # session_id -> list of {"user": "...", "bot": "..."}
+# Cache vẫn ở dạng file JSON; lịch sử hội thoại lưu bền trong SQLite (app/storage.py)
+CACHE = load_cache()  # normalized question -> {answer, timestamp}
+MAX_HISTORY = 50
+MAX_QUESTION_LEN = 1000
 
-# Request model
+
 class QuestionRequest(BaseModel):
     question: str
     session_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    stream: bool = Field(False, description="Nếu true dùng streaming endpoint (không bắt buộc)")
+    stream: bool = Field(False, description="Nếu true dùng streaming endpoint")
 
-# Load components (retriever, prompt, llm, vectorstore, embeddings)
+
+# Load components (llm, prompt, full-document context)
 components = create_qa_components()
-retriever = components["retriever"]
 prompt = components["prompt"]
 llm = components["llm"]
-vectorstore = components["vectorstore"]
-embeddings = components.get("embeddings", None)
+context_text = components["context"]
+context_fits = components.get("context_fits", True)
 
 logger.info("🌟 QA components loaded thành công")
 
 
-# Helper: call LLM robustly (sync) and extract text
-def call_llm_sync(llm_obj, text):
-    try:
-        out = None
-        try:
-            out = llm_obj.invoke(text)
-        except Exception:
-            try:
-                gen = llm_obj.generate([text])
-                # extract text
-                if hasattr(gen, "generations"):
-                    out = gen.generations[0][0].text
-                else:
-                    out = str(gen)
-            except Exception:
-                try:
-                    out = llm_obj(text)
-                except Exception as e:
-                    out = str(e)
-        # normalize
-        if isinstance(out, dict):
-            return out.get("text") or out.get("output_text") or str(out)
-        if hasattr(out, "generations"):
-            try:
-                return out.generations[0][0].text
-            except Exception:
-                return str(out)
-        return str(out)
-    except Exception as e:
-        logger.exception("Lỗi khi gọi LLM sync:")
-        return f"Error: {e}"
+def normalize_question(question: str) -> str:
+    """Chuẩn hoá câu hỏi để dùng làm khoá cache (gộp khoảng trắng, bỏ hoa/thường)."""
+    return " ".join(question.lower().split())
 
 
-# Helper: streaming generator (best-effort)
-def stream_answer_generator(answer_text, chunk_size=120):
-    """
-    Nếu LLM không hỗ trợ streaming, chúng ta chunk text thành các phần nhỏ để gửi dần.
-    Nếu LLM wrapper hỗ trợ stream natively, bạn có thể thay phần này bằng stream từ llm.
-    """
-    i = 0
-    text = answer_text or ""
-    while i < len(text):
-        chunk = text[i : i + chunk_size]
-        i += chunk_size
-        yield chunk
-        time.sleep(0.01)  # very small sleep so client gets chunks smoothly
+def validate_question(question: str) -> str:
+    question = question.strip()
+    if not question:
+        raise HTTPException(status_code=400, detail="Câu hỏi không được để trống.")
+    if len(question) > MAX_QUESTION_LEN:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Câu hỏi quá dài (tối đa {MAX_QUESTION_LEN} ký tự).",
+        )
+    return question
+
+
+def call_llm(formatted: str) -> str:
+    """Gọi LLM và trả về text. OllamaLLM.invoke trả về str."""
+    out = llm.invoke(formatted)
+    return out if isinstance(out, str) else str(out)
+
+
+def build_answer(question: str) -> str:
+    formatted = prompt.format(context=context_text, question=question)
+    return call_llm(formatted).strip()
+
+
+def store_answer(session_id: str, question: str, answer: str) -> str:
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    storage.add_turn(session_id, question, answer, timestamp)
+    CACHE[normalize_question(question)] = {"answer": answer, "timestamp": timestamp}
+    save_cache(CACHE)
+    return timestamp
 
 
 @app.post("/ask")
 async def ask_question(req: QuestionRequest):
-    question = req.question.strip()
+    question = validate_question(req.question)
     session_id = req.session_id
     start = time.time()
     logger.info("Nhận câu hỏi: %s (session=%s)", question, session_id)
 
-    # Ensure history exists
-    if session_id not in HISTORY:
-        HISTORY[session_id] = []
-
-    # 1) Cache check
-    if question in CACHE:
+    # Cache check
+    cached = CACHE.get(normalize_question(question))
+    if cached:
         logger.info("Lấy câu trả lời từ cache")
-        cached = CACHE[question]
         return JSONResponse(
             {
                 "session_id": session_id,
@@ -129,32 +114,9 @@ async def ask_question(req: QuestionRequest):
             }
         )
 
-    # 2) Rewrite query using history (improve retrieval)
     try:
-        rewritten = rewrite_query_with_history(llm, prompt, HISTORY[session_id], question)
-        logger.info("Query rewritten: %s", rewritten)
-    except Exception:
-        rewritten = question
-
-    # 3) Get top docs with rerank by vectorstore scores
-    docs, scores = get_top_docs_vectorstore(vectorstore, rewritten, top_k=3, rerank_k=8)
-    context = "\n\n".join(d.page_content.strip() for d in docs if getattr(d, "page_content", None))
-    if not context:
-        context = "Không tìm thấy thông tin liên quan trong tài liệu."
-
-    # 4) Format prompt
-    formatted = prompt.format(context=context, question=question)
-
-    # 5) Call LLM sync and return
-    try:
-        answer = call_llm_sync(llm, formatted)
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-        # update history & cache
-        HISTORY[session_id].append({"user": question, "bot": answer})
-        CACHE[question] = {"answer": answer, "timestamp": timestamp}
-        save_cache(CACHE)
-
+        answer = build_answer(question)
+        timestamp = store_answer(session_id, question, answer)
         elapsed = round(time.time() - start, 3)
         logger.info("Trả lời xong trong %ss", elapsed)
 
@@ -175,78 +137,71 @@ async def ask_question(req: QuestionRequest):
 
 @app.post("/ask_stream")
 async def ask_question_stream(req: QuestionRequest):
-    """
-    Streaming endpoint: trả từng chunk. Nếu llm wrapper hỗ trợ streaming natively
-    bạn có thể sửa phần call_llm_sync => call_llm_stream.
-    """
-    question = req.question.strip()
+    """Streaming endpoint: trả token dần bằng API streaming gốc của Ollama."""
+    question = validate_question(req.question)
     session_id = req.session_id
     logger.info("Nhận (stream) câu hỏi: %s (session=%s)", question, session_id)
 
-    if session_id not in HISTORY:
-        HISTORY[session_id] = []
+    # Cache hit -> stream luôn câu trả lời đã lưu
+    cached = CACHE.get(normalize_question(question))
+    if cached:
+        logger.info("Stream câu trả lời từ cache")
 
-    # rewrite
-    rewritten = rewrite_query_with_history(llm, prompt, HISTORY[session_id], question)
+        def cached_gen():
+            yield cached["answer"]
 
-    docs, scores = get_top_docs_vectorstore(vectorstore, rewritten, top_k=3, rerank_k=8)
-    context = "\n\n".join(d.page_content.strip() for d in docs if getattr(d, "page_content", None))
-    if not context:
-        context = "Không tìm thấy thông tin liên quan trong tài liệu."
+        return StreamingResponse(cached_gen(), media_type="text/plain")
 
-    formatted = prompt.format(context=context, question=question)
+    formatted = prompt.format(context=context_text, question=question)
 
-    # Try to use streaming API on LLM if exists
-    # Best-effort: if llm has 'stream' method or 'stream_generate', use it.
-    try:
-        # Example: llm.stream_generate([...]) -> yields parts (depends on wrapper)
-        if hasattr(llm, "stream") or hasattr(llm, "stream_generate"):
-            # wrapper-specific call: try a few names
-            stream_fn = None
-            if hasattr(llm, "stream"):
-                stream_fn = getattr(llm, "stream")
-            elif hasattr(llm, "stream_generate"):
-                stream_fn = getattr(llm, "stream_generate")
+    def generator():
+        parts = []
+        try:
+            for chunk in llm.stream(formatted):
+                text = chunk if isinstance(chunk, str) else str(chunk)
+                parts.append(text)
+                yield text
+        except Exception as e:
+            logger.exception("❌ Lỗi streaming")
+            yield f"\n[Lỗi: {e}]"
+            return
+        # lưu lịch sử & cache sau khi stream xong
+        answer = "".join(parts).strip()
+        if answer:
+            store_answer(session_id, question, answer)
 
-            if stream_fn:
-                def generator():
-                    try:
-                        for part in stream_fn([formatted]):
-                            # try to extract text
-                            if isinstance(part, dict):
-                                chunk = part.get("text") or str(part)
-                            else:
-                                chunk = str(part)
-                            yield chunk
-                    except Exception as e:
-                        logger.warning("Stream from LLM failed, fallback chunking: %s", e)
-                        # fallback: call sync and chunk
-                        ans = call_llm_sync(llm, formatted)
-                        for c in stream_answer_generator(ans):
-                            yield c
-                return StreamingResponse(generator(), media_type="text/plain")
-        # Fallback: call sync and chunk the answer
-        answer = call_llm_sync(llm, formatted)
-        # update history and cache
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        HISTORY[session_id].append({"user": question, "bot": answer})
-        CACHE[question] = {"answer": answer, "timestamp": timestamp}
-        save_cache(CACHE)
-
-        return StreamingResponse(stream_answer_generator(answer), media_type="text/plain")
-    except Exception as e:
-        logger.exception("❌ Lỗi streaming")
-        raise HTTPException(status_code=500, detail=str(e))
+    return StreamingResponse(generator(), media_type="text/plain")
 
 
 @app.get("/history/{session_id}")
 async def get_history(session_id: str):
-    return {"session_id": session_id, "history": HISTORY.get(session_id, [])}
+    return {
+        "session_id": session_id,
+        "history": storage.get_history(session_id, limit=MAX_HISTORY),
+    }
 
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "message": "running"}
+    """Kiểm tra cả API lẫn kết nối tới Ollama."""
+    base_url = os.getenv("BASE_URL", "http://127.0.0.1:11434")
+    try:
+        with urllib.request.urlopen(f"{base_url}/api/tags", timeout=3) as resp:
+            ollama_ok = resp.status == 200
+    except Exception as e:
+        logger.warning("Ollama không phản hồi: %s", e)
+        ollama_ok = False
+
+    status = "ok" if ollama_ok else "degraded"
+    return JSONResponse(
+        status_code=200 if ollama_ok else 503,
+        content={
+            "status": status,
+            "ollama": ollama_ok,
+            "context_chars": len(context_text),
+            "context_fits": context_fits,
+        },
+    )
 
 
 # Static & Root
