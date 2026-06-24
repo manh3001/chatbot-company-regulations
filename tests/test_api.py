@@ -18,7 +18,7 @@ def isolate_state(monkeypatch):
     """Mỗi test bắt đầu với cache/history sạch và không ghi cache ra đĩa."""
     main_module.CACHE.clear()
     storage.clear_all()
-    monkeypatch.setattr(main_module, "save_cache", lambda data: None)
+    monkeypatch.setattr(main_module, "save_cache", lambda data, doc_hash=None: None)
     yield
     main_module.CACHE.clear()
     storage.clear_all()

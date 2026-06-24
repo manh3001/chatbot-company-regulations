@@ -17,6 +17,7 @@ from app.rag_chain import (
     create_qa_components,
     load_cache,
     save_cache,
+    compute_doc_hash,
 )
 
 load_dotenv()
@@ -34,8 +35,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Cache vẫn ở dạng file JSON; lịch sử hội thoại lưu bền trong SQLite (app/storage.py)
-CACHE = load_cache()  # normalized question -> {answer, timestamp}
 MAX_HISTORY = 50
 MAX_QUESTION_LEN = 1000
 
@@ -52,6 +51,9 @@ prompt = components["prompt"]
 llm = components["llm"]
 context_text = components["context"]
 context_fits = components.get("context_fits", True)
+
+DOC_HASH = components["doc_hash"]
+CACHE = load_cache(DOC_HASH)  # normalized question -> {answer, timestamp}
 
 logger.info("🌟 QA components loaded thành công")
 
@@ -88,7 +90,7 @@ def store_answer(session_id: str, question: str, answer: str) -> str:
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     storage.add_turn(session_id, question, answer, timestamp)
     CACHE[normalize_question(question)] = {"answer": answer, "timestamp": timestamp}
-    save_cache(CACHE)
+    save_cache(CACHE, DOC_HASH)
     return timestamp
 
 

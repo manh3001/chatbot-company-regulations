@@ -1,5 +1,6 @@
 import os
 import json
+import hashlib
 import logging
 from dotenv import load_dotenv
 
@@ -12,21 +13,34 @@ logger = logging.getLogger(__name__)
 CACHE_FILE = "cache.json"
 
 
-def load_cache():
+def compute_doc_hash(context_text: str) -> str:
+    """Hash nội dung tài liệu để phát hiện khi nội quy thay đổi."""
+    return hashlib.sha256(context_text.encode("utf-8")).hexdigest()
+
+
+def load_cache(doc_hash: str) -> dict:
+    """Đọc cache.json và chỉ trả về entries nếu doc_hash khớp tài liệu hiện tại.
+    Nếu tài liệu đã đổi (hoặc file ở định dạng cũ/hỏng) thì coi như cache rỗng."""
     if os.path.exists(CACHE_FILE):
         try:
             with open(CACHE_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
-                return data or {}
+            if isinstance(data, dict) and data.get("doc_hash") == doc_hash:
+                return data.get("entries") or {}
         except Exception as e:
             logger.warning("❌ Lỗi khi đọc cache: %s", e)
     return {}
 
 
-def save_cache(cache_data):
+def save_cache(entries: dict, doc_hash: str) -> None:
     try:
         with open(CACHE_FILE, "w", encoding="utf-8") as f:
-            json.dump(cache_data, f, ensure_ascii=False, indent=2)
+            json.dump(
+                {"doc_hash": doc_hash, "entries": entries},
+                f,
+                ensure_ascii=False,
+                indent=2,
+            )
     except Exception as e:
         logger.warning("❌ Lỗi khi ghi cache: %s", e)
 
@@ -98,6 +112,7 @@ Trả lời (ngắn gọn, bằng tiếng Việt, chỉ nêu đúng thông tin �
         "prompt": prompt,
         "context": context_text,
         "context_fits": context_fits,
+        "doc_hash": compute_doc_hash(context_text),
     }
 
 
@@ -105,6 +120,7 @@ __all__ = [
     "create_qa_components",
     "load_cache",
     "save_cache",
+    "compute_doc_hash",
     "load_document",
     "check_context_fits",
 ]
