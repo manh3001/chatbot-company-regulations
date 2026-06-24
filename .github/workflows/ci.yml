@@ -15,4 +15,6 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements-dev.txt
       - name: Run tests
+        # Scoped to tests/ on purpose: the repo root has a leftover test_cuda.py
+        # GPU probe that imports torch (not a dependency). Do not broaden to bare pytest.
         run: pytest tests/
