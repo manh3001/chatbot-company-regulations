@@ -172,6 +172,8 @@ async def ask_question_stream(req: QuestionRequest):
         history=format_history(prior),
     )
 
+    first_turn = is_first_turn
+
     def generator():
         parts = []
         try:
@@ -185,7 +187,7 @@ async def ask_question_stream(req: QuestionRequest):
             return
         answer = "".join(parts).strip()
         if answer:
-            store_answer(session_id, question, answer, is_first_turn)
+            store_answer(session_id, question, answer, first_turn)
 
     return StreamingResponse(generator(), media_type="text/plain")
 

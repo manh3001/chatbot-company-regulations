@@ -139,7 +139,7 @@ def test_followup_in_session_is_not_cached(client, fake_llm):
     first = client.post("/ask", json=payload).json()
     second = client.post("/ask", json=payload).json()
     assert first["cached"] is False
-    assert second["cached"] is False
+    assert second.get("cached") is False
     assert fake_llm["count"] == 2
 
 
@@ -151,3 +151,4 @@ def test_history_passed_to_llm_on_followup(client, fake_llm):
     history = fake_llm["last_history"]
     assert history is not None
     assert any(turn["user"] == "Giờ làm việc?" for turn in history)
+    assert len(history) == 1
