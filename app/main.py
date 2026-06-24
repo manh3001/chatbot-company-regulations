@@ -17,7 +17,6 @@ from app.rag_chain import (
     create_qa_components,
     load_cache,
     save_cache,
-    compute_doc_hash,
 )
 
 load_dotenv()
