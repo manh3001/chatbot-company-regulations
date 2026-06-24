@@ -72,6 +72,18 @@ def check_context_fits(context_text: str, num_ctx: int) -> bool:
     return True
 
 
+def format_history(turns) -> str:
+    """Dựng khối lịch sử hội thoại để chèn vào prompt. Rỗng nếu không có lượt nào."""
+    if not turns:
+        return ""
+    lines = ["===== LỊCH SỬ HỘI THOẠI ====="]
+    for turn in turns:
+        lines.append(f"Người dùng: {turn['user']}")
+        lines.append(f"Trợ lý: {turn['bot']}")
+    lines.append("=============================")
+    return "\n".join(lines)
+
+
 def create_qa_components(docs_path="data/company_rules.txt"):
     """
     Trả về dict: { "llm": llm, "prompt": prompt, "context": context_text, "context_fits": bool }
@@ -98,13 +110,16 @@ Nếu nội quy không đề cập, hãy trả lời đúng một câu: "Không 
 Khi có thông tin, sau câu trả lời hãy xuống dòng và ghi nguồn theo dạng:
 Nguồn: <tên mục liên quan, ví dụ: "Mục 2. Thời gian làm việc">
 
+{history}
 ===== NỘI QUY =====
 {context}
 ===================
 
 Câu hỏi: {question}
 Trả lời (ngắn gọn, bằng tiếng Việt, chỉ nêu đúng thông tin được hỏi):"""
-    prompt = PromptTemplate(template=template, input_variables=["context", "question"])
+    prompt = PromptTemplate(
+        template=template, input_variables=["context", "question", "history"]
+    )
 
     logger.info("✅ Components đã sẵn sàng")
     return {
@@ -121,6 +136,7 @@ __all__ = [
     "load_cache",
     "save_cache",
     "compute_doc_hash",
+    "format_history",
     "load_document",
     "check_context_fits",
 ]

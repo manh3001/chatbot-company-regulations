@@ -26,11 +26,12 @@ def isolate_state(monkeypatch):
 
 @pytest.fixture
 def fake_llm(monkeypatch):
-    """Thay LLM thật bằng câu trả lời cố định, đếm số lần gọi."""
-    calls = {"count": 0}
+    """Thay LLM thật bằng câu trả lời cố định; ghi lại history nhận được."""
+    calls = {"count": 0, "last_history": None}
 
-    def fake_build_answer(question: str) -> str:
+    def fake_build_answer(question: str, history) -> str:
         calls["count"] += 1
+        calls["last_history"] = history
         return f"Trả lời cho: {question}"
 
     monkeypatch.setattr(main_module, "build_answer", fake_build_answer)
@@ -129,3 +130,24 @@ def test_history_persists_across_storage_calls(client, fake_llm):
     rows = storage.get_history(sid)
     assert [r["user"] for r in rows] == ["Giờ làm việc?", "Nghỉ trưa mấy giờ?"]
     assert all("timestamp" in r for r in rows)
+
+
+def test_followup_in_session_is_not_cached(client, fake_llm):
+    """Lượt 2 trong cùng session có lịch sử -> không dùng cache, gọi LLM lại."""
+    sid = "conv-session"
+    payload = {"question": "Giờ làm việc?", "session_id": sid}
+    first = client.post("/ask", json=payload).json()
+    second = client.post("/ask", json=payload).json()
+    assert first["cached"] is False
+    assert second["cached"] is False
+    assert fake_llm["count"] == 2
+
+
+def test_history_passed_to_llm_on_followup(client, fake_llm):
+    """Lượt sau phải nhận lịch sử của lượt trước trong cùng session."""
+    sid = "conv-session-2"
+    client.post("/ask", json={"question": "Giờ làm việc?", "session_id": sid})
+    client.post("/ask", json={"question": "Còn nghỉ trưa?", "session_id": sid})
+    history = fake_llm["last_history"]
+    assert history is not None
+    assert any(turn["user"] == "Giờ làm việc?" for turn in history)
