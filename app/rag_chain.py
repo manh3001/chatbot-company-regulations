@@ -1,5 +1,6 @@
 import os
 import json
+import hashlib
 import logging
 from dotenv import load_dotenv
 
@@ -12,21 +13,34 @@ logger = logging.getLogger(__name__)
 CACHE_FILE = "cache.json"
 
 
-def load_cache():
+def compute_doc_hash(context_text: str) -> str:
+    """Hash nội dung tài liệu để phát hiện khi nội quy thay đổi."""
+    return hashlib.sha256(context_text.encode("utf-8")).hexdigest()
+
+
+def load_cache(doc_hash: str) -> dict:
+    """Đọc cache.json và chỉ trả về entries nếu doc_hash khớp tài liệu hiện tại.
+    Nếu tài liệu đã đổi (hoặc file ở định dạng cũ/hỏng) thì coi như cache rỗng."""
     if os.path.exists(CACHE_FILE):
         try:
             with open(CACHE_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
-                return data or {}
+            if isinstance(data, dict) and data.get("doc_hash") == doc_hash:
+                return data.get("entries") or {}
         except Exception as e:
             logger.warning("❌ Lỗi khi đọc cache: %s", e)
     return {}
 
 
-def save_cache(cache_data):
+def save_cache(entries: dict, doc_hash: str) -> None:
     try:
         with open(CACHE_FILE, "w", encoding="utf-8") as f:
-            json.dump(cache_data, f, ensure_ascii=False, indent=2)
+            json.dump(
+                {"doc_hash": doc_hash, "entries": entries},
+                f,
+                ensure_ascii=False,
+                indent=2,
+            )
     except Exception as e:
         logger.warning("❌ Lỗi khi ghi cache: %s", e)
 
@@ -58,6 +72,18 @@ def check_context_fits(context_text: str, num_ctx: int) -> bool:
     return True
 
 
+def format_history(turns) -> str:
+    """Dựng khối lịch sử hội thoại để chèn vào prompt. Rỗng nếu không có lượt nào."""
+    if not turns:
+        return ""
+    lines = ["===== LỊCH SỬ HỘI THOẠI ====="]
+    for turn in turns:
+        lines.append(f"Người dùng: {turn['user']}")
+        lines.append(f"Trợ lý: {turn['bot']}")
+    lines.append("=============================")
+    return "\n".join(lines)
+
+
 def create_qa_components(docs_path="data/company_rules.txt"):
     """
     Trả về dict: { "llm": llm, "prompt": prompt, "context": context_text, "context_fits": bool }
@@ -84,13 +110,16 @@ Nếu nội quy không đề cập, hãy trả lời đúng một câu: "Không 
 Khi có thông tin, sau câu trả lời hãy xuống dòng và ghi nguồn theo dạng:
 Nguồn: <tên mục liên quan, ví dụ: "Mục 2. Thời gian làm việc">
 
+{history}
 ===== NỘI QUY =====
 {context}
 ===================
 
 Câu hỏi: {question}
 Trả lời (ngắn gọn, bằng tiếng Việt, chỉ nêu đúng thông tin được hỏi):"""
-    prompt = PromptTemplate(template=template, input_variables=["context", "question"])
+    prompt = PromptTemplate(
+        template=template, input_variables=["context", "question", "history"]
+    )
 
     logger.info("✅ Components đã sẵn sàng")
     return {
@@ -98,6 +127,7 @@ Trả lời (ngắn gọn, bằng tiếng Việt, chỉ nêu đúng thông tin �
         "prompt": prompt,
         "context": context_text,
         "context_fits": context_fits,
+        "doc_hash": compute_doc_hash(context_text),
     }
 
 
@@ -105,6 +135,8 @@ __all__ = [
     "create_qa_components",
     "load_cache",
     "save_cache",
+    "compute_doc_hash",
+    "format_history",
     "load_document",
     "check_context_fits",
 ]

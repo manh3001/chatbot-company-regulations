@@ -17,6 +17,7 @@ from app.rag_chain import (
     create_qa_components,
     load_cache,
     save_cache,
+    format_history,
 )
 
 load_dotenv()
@@ -34,10 +35,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Cache vẫn ở dạng file JSON; lịch sử hội thoại lưu bền trong SQLite (app/storage.py)
-CACHE = load_cache()  # normalized question -> {answer, timestamp}
 MAX_HISTORY = 50
 MAX_QUESTION_LEN = 1000
+HISTORY_LIMIT = 3
 
 
 class QuestionRequest(BaseModel):
@@ -52,6 +52,9 @@ prompt = components["prompt"]
 llm = components["llm"]
 context_text = components["context"]
 context_fits = components.get("context_fits", True)
+
+DOC_HASH = components["doc_hash"]
+CACHE = load_cache(DOC_HASH)  # normalized question -> {answer, timestamp}
 
 logger.info("🌟 QA components loaded thành công")
 
@@ -79,16 +82,21 @@ def call_llm(formatted: str) -> str:
     return out if isinstance(out, str) else str(out)
 
 
-def build_answer(question: str) -> str:
-    formatted = prompt.format(context=context_text, question=question)
+def build_answer(question: str, history) -> str:
+    formatted = prompt.format(
+        context=context_text,
+        question=question,
+        history=format_history(history),
+    )
     return call_llm(formatted).strip()
 
 
-def store_answer(session_id: str, question: str, answer: str) -> str:
+def store_answer(session_id: str, question: str, answer: str, is_first_turn: bool) -> str:
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     storage.add_turn(session_id, question, answer, timestamp)
-    CACHE[normalize_question(question)] = {"answer": answer, "timestamp": timestamp}
-    save_cache(CACHE)
+    if is_first_turn:
+        CACHE[normalize_question(question)] = {"answer": answer, "timestamp": timestamp}
+        save_cache(CACHE, DOC_HASH)
     return timestamp
 
 
@@ -99,24 +107,27 @@ async def ask_question(req: QuestionRequest):
     start = time.time()
     logger.info("Nhận câu hỏi: %s (session=%s)", question, session_id)
 
-    # Cache check
-    cached = CACHE.get(normalize_question(question))
-    if cached:
-        logger.info("Lấy câu trả lời từ cache")
-        return JSONResponse(
-            {
-                "session_id": session_id,
-                "question": question,
-                "answer": cached["answer"],
-                "response_time": round(time.time() - start, 3),
-                "cached": True,
-                "timestamp": cached["timestamp"],
-            }
-        )
+    prior = storage.get_history(session_id, limit=HISTORY_LIMIT)
+    is_first_turn = len(prior) == 0
+
+    if is_first_turn:
+        cached = CACHE.get(normalize_question(question))
+        if cached:
+            logger.info("Lấy câu trả lời từ cache")
+            return JSONResponse(
+                {
+                    "session_id": session_id,
+                    "question": question,
+                    "answer": cached["answer"],
+                    "response_time": round(time.time() - start, 3),
+                    "cached": True,
+                    "timestamp": cached["timestamp"],
+                }
+            )
 
     try:
-        answer = build_answer(question)
-        timestamp = store_answer(session_id, question, answer)
+        answer = build_answer(question, prior)
+        timestamp = store_answer(session_id, question, answer, is_first_turn)
         elapsed = round(time.time() - start, 3)
         logger.info("Trả lời xong trong %ss", elapsed)
 
@@ -142,17 +153,26 @@ async def ask_question_stream(req: QuestionRequest):
     session_id = req.session_id
     logger.info("Nhận (stream) câu hỏi: %s (session=%s)", question, session_id)
 
-    # Cache hit -> stream luôn câu trả lời đã lưu
-    cached = CACHE.get(normalize_question(question))
-    if cached:
-        logger.info("Stream câu trả lời từ cache")
+    prior = storage.get_history(session_id, limit=HISTORY_LIMIT)
+    is_first_turn = len(prior) == 0
 
-        def cached_gen():
-            yield cached["answer"]
+    if is_first_turn:
+        cached = CACHE.get(normalize_question(question))
+        if cached:
+            logger.info("Stream câu trả lời từ cache")
 
-        return StreamingResponse(cached_gen(), media_type="text/plain")
+            def cached_gen():
+                yield cached["answer"]
 
-    formatted = prompt.format(context=context_text, question=question)
+            return StreamingResponse(cached_gen(), media_type="text/plain")
+
+    formatted = prompt.format(
+        context=context_text,
+        question=question,
+        history=format_history(prior),
+    )
+
+    first_turn = is_first_turn
 
     def generator():
         parts = []
@@ -165,10 +185,9 @@ async def ask_question_stream(req: QuestionRequest):
             logger.exception("❌ Lỗi streaming")
             yield f"\n[Lỗi: {e}]"
             return
-        # lưu lịch sử & cache sau khi stream xong
         answer = "".join(parts).strip()
         if answer:
-            store_answer(session_id, question, answer)
+            store_answer(session_id, question, answer, first_turn)
 
     return StreamingResponse(generator(), media_type="text/plain")
 
