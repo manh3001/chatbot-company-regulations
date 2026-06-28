@@ -210,3 +210,43 @@ async function loadHistory() {
 }
 
 loadHistory();
+
+const THEME_KEY = "chat_theme";
+const themeToggle = document.getElementById("theme-toggle");
+const newChatBtn = document.getElementById("new-chat-btn");
+
+function applyTheme(theme) {
+  if (theme === "dark") {
+    document.documentElement.setAttribute("data-theme", "dark");
+    themeToggle.textContent = "☀️";
+  } else {
+    document.documentElement.removeAttribute("data-theme");
+    themeToggle.textContent = "🌙";
+  }
+}
+
+function initTheme() {
+  const saved = localStorage.getItem(THEME_KEY);
+  const prefersDark =
+    window.matchMedia &&
+    window.matchMedia("(prefers-color-scheme: dark)").matches;
+  applyTheme(saved || (prefersDark ? "dark" : "light"));
+}
+
+themeToggle.addEventListener("click", () => {
+  const isDark = document.documentElement.getAttribute("data-theme") === "dark";
+  const next = isDark ? "light" : "dark";
+  localStorage.setItem(THEME_KEY, next);
+  applyTheme(next);
+});
+
+newChatBtn.addEventListener("click", () => {
+  const id = crypto.randomUUID ? crypto.randomUUID() : String(Date.now());
+  setSessionId(id);
+  sessionId = id;
+  clearChat();
+  showWelcome();
+  userInput.focus();
+});
+
+initTheme();
