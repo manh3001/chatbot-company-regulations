@@ -18,3 +18,8 @@ jobs:
         # Scoped to tests/ on purpose: the repo root has a leftover test_cuda.py
         # GPU probe that imports torch (not a dependency). Do not broaden to bare pytest.
         run: python -m pytest tests/
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Run frontend unit tests
+        run: node --test tests/frontend/
