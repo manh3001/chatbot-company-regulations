@@ -179,3 +179,34 @@ userInput.addEventListener("keydown", (e) => {
     sendMessage();
   }
 });
+
+function showWelcome() {
+  const div = document.createElement("div");
+  div.className = "empty-state";
+  div.textContent = "Xin chào! Hãy đặt câu hỏi về nội quy công ty.";
+  chatBox.appendChild(div);
+}
+
+async function loadHistory() {
+  try {
+    const res = await fetch(`/history/${sessionId}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    const turns = (data && data.history) || [];
+    clearChat();
+    if (turns.length === 0) {
+      showWelcome();
+      return;
+    }
+    for (const turn of turns) {
+      appendUserMessage(turn.user, turn.timestamp);
+      appendBotMessage(turn.bot, turn.timestamp);
+    }
+  } catch (err) {
+    console.error(err);
+    clearChat();
+    showWelcome();
+  }
+}
+
+loadHistory();
