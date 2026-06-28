@@ -13,11 +13,14 @@ function getSessionId() {
   return id;
 }
 
+let sessionId = getSessionId();
+
 function setSessionId(id) {
+  sessionId = id;
   localStorage.setItem(SESSION_KEY, id);
 }
 
-let sessionId = getSessionId();
+let isStreaming = false;
 
 function nowStamp() {
   return new Date().toLocaleString("vi-VN");
@@ -124,10 +127,12 @@ function appendBotMessage(rawAnswer, timestamp) {
 async function sendMessage() {
   const question = userInput.value.trim();
   if (!question) return;
+  if (isStreaming) return;
 
   appendUserMessage(question);
   userInput.value = "";
   autoResize();
+  isStreaming = true;
   sendBtn.disabled = true;
 
   const bot = startBotMessage();
@@ -148,6 +153,7 @@ async function sendMessage() {
       answer += decoder.decode(value, { stream: true });
       bot.pushToken(answer);
     }
+    answer += decoder.decode();
 
     if (answer.trim()) {
       bot.finalize(answer);
@@ -158,6 +164,7 @@ async function sendMessage() {
     console.error(err);
     bot.error("Lỗi kết nối đến server.");
   } finally {
+    isStreaming = false;
     sendBtn.disabled = false;
     userInput.focus();
   }
