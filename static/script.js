@@ -40,6 +40,10 @@ function autoResize() {
 }
 
 function appendUserMessage(text, timestamp) {
+  // Drop the welcome/empty state once a real conversation starts.
+  const empty = chatBox.querySelector(".empty-state");
+  if (empty) empty.remove();
+
   const msg = document.createElement("div");
   msg.className = "message user";
 
