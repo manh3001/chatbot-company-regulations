@@ -20,6 +20,8 @@ jobs:
         run: python -m pytest tests/
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
       - name: Run frontend unit tests
-        run: node --test tests/frontend/
+        # Quoted glob so Node (not the shell) expands it — portable across
+        # bash/PowerShell. Node's --test glob support requires Node >= 21.
+        run: node --test "tests/frontend/**/*.test.js"

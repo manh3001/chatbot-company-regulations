@@ -164,7 +164,7 @@ Front-end pure functions (markdown rendering, citation parsing) have their own
 Node-based unit tests:
 
 ```bash
-node --test tests/frontend/
+node --test "tests/frontend/**/*.test.js"
 ```
 
 ## License
