@@ -19,7 +19,10 @@ Vietnamese, matching the language of the source regulations.
 - **Persistent history** — conversations are stored in SQLite and survive
   restarts.
 - **Health check** — verifies both the API and the Ollama connection.
-- **Web UI** — a simple static front end is served from `/`.
+- **Modern web UI** — a responsive, vanilla front end served from `/` with
+  light/dark themes, streamed answers, markdown rendering, visible source
+  citations, conversation history restored on reload, copy-to-clipboard, and a
+  "new chat" button. No build step.
 
 ## How it works
 
@@ -155,6 +158,13 @@ the new document is loaded into context.
 ```bash
 pip install -r requirements-dev.txt
 pytest
+```
+
+Front-end pure functions (markdown rendering, citation parsing) have their own
+Node-based unit tests:
+
+```bash
+node --test "tests/frontend/**/*.test.js"
 ```
 
 ## License
